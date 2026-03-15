@@ -6,7 +6,8 @@ An AI-powered chatbot for querying UnitedHealthcare commercial medical and drug 
 
 ## Live Demo
 
-> **Hosted URL:** _Add your deployment URL here (e.g. https://insurer-policy-chatbot.vercel.app)_
+> **Hosted URL:** _https://insurer-policy-chatbot.vercel.app/_
+Note: The backend is hosted on Render and the frontend is hosted on Vercel. The first request might take 2-3 minutes to load as the backend is in sleep mode.
 
 ---
 
@@ -66,65 +67,61 @@ The assistant maintains conversation history for your session (last 4 turns). Yo
 
 ### High-Level Design (HLD)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                      User (Browser)                      │
-│              React + Vite + Tailwind CSS                 │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTPS / SSE streaming
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│                  FastAPI Backend (Python)                 │
-│                                                          │
-│  POST /chat  ──►  RAG Chain  ──►  Groq LLM              │
-│  GET /policies ──► Qdrant scroll                         │
-│  GET /health                                             │
-└───────────┬─────────────────────────┬───────────────────┘
-            │                         │
-            ▼                         ▼
-┌───────────────────┐     ┌──────────────────────┐
-│   Qdrant Cloud    │     │   Groq API           │
-│  Vector Database  │     │  compound-beta LLM   │
-│  5,987 chunks     │     │  Streaming responses │
-└───────────────────┘     └──────────────────────┘
-            ▲
-            │ (one-time ingestion)
-┌───────────────────────────────────────────────────────┐
-│                 Ingestion Pipeline                     │
-│                                                       │
-│  UHC Website  ──►  PDF Download  ──►  pdfplumber     │
-│  (254 PDFs)       Parser  ──►  Chunker  ──►  Embed   │
-│                   HuggingFace all-MiniLM-L6-v2        │
-└───────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    User["🖥️ User Browser\nReact + Vite + Tailwind CSS"]
+
+    subgraph Backend["FastAPI Backend (Python)"]
+        chat["POST /chat\nRAG Chain"]
+        policies["GET /policies\nQdrant scroll"]
+        health["GET /health"]
+    end
+
+    subgraph External["External Services"]
+        Qdrant["🗄️ Qdrant Cloud\nVector Database\n5,987 chunks"]
+        Groq["⚡ Groq API\ncompound-beta LLM\nStreaming responses"]
+    end
+
+    subgraph Ingestion["Ingestion Pipeline (one-time)"]
+        uhc["UHC Website\n254 PDFs"]
+        parse["pdfplumber\nParser + Chunker"]
+        embed["FastEmbed\nall-MiniLM-L6-v2\nONNX · 384-dim"]
+    end
+
+    User -->|"HTTPS / SSE streaming"| chat
+    User -->|"HTTPS"| policies
+    chat --> Qdrant
+    chat --> Groq
+    policies --> Qdrant
+    uhc --> parse --> embed --> Qdrant
 ```
 
 ### Data Flow per User Query
 
-```
-User Query
-    │
-    ▼
-1. Query Rewriting (resolve pronouns using conversation history)
-    │
-    ▼
-2. Route: CPT/HCPCS code detected? → metadata.cpt_codes filter
-         Otherwise                 → semantic similarity search
-    │
-    ▼
-3. Qdrant vector search (top-8 chunks)
-    │
-    ▼
-4. Rerank: float coverage_rationale + exclusions chunks to top
-    │
-    ▼
-5. Format context (8 chunks) + conversation history → system prompt
-    │
-    ▼
-6. Groq LLM (compound-beta) — streaming SSE response
-    │
-    ├──► Token stream → frontend renders markdown in real time
-    │
-    └──► Citations sent after generation completes
+```mermaid
+flowchart TD
+    Q["User Query"]
+    RW["1️⃣ Query Rewriting\nResolve pronouns using conversation history"]
+    RT{"2️⃣ Route Query"}
+    CPT["CPT/HCPCS filter\nmetadata.cpt_codes"]
+    SEM["Semantic similarity search"]
+    FB["Fallback to semantic\nif filter returns 0 results"]
+    VEC["3️⃣ Qdrant vector search\ntop-8 chunks"]
+    RR["4️⃣ Rerank\nFloat coverage_rationale + exclusions to top"]
+    PROMPT["5️⃣ Build system prompt\n8 chunks + conversation history"]
+    LLM["6️⃣ Groq LLM — compound-beta\nStreaming SSE"]
+    TOKENS["Token stream\nFrontend renders markdown"]
+    CITE["Citations emitted\nafter generation completes"]
+
+    Q --> RW --> RT
+    RT -->|"code pattern detected"| CPT
+    RT -->|"no code"| SEM
+    CPT --> FB --> VEC
+    CPT --> VEC
+    SEM --> VEC
+    VEC --> RR --> PROMPT --> LLM
+    LLM --> TOKENS
+    LLM --> CITE
 ```
 
 ---
@@ -139,7 +136,7 @@ backend/
 │   ├── config.py               # Env vars, provider registry, model settings
 │   ├── main.py                 # FastAPI app, CORS, rate limiting, lifespan warmup
 │   ├── core/
-│   │   ├── embeddings.py       # Cached HuggingFace MiniLM embeddings singleton
+│   │   ├── embeddings.py       # Cached FastEmbed MiniLM embeddings singleton (ONNX, no PyTorch)
 │   │   ├── retriever.py        # Qdrant search: CPT filter + semantic + reranker
 │   │   ├── rag_chain.py        # RAG pipeline: query rewrite → retrieve → LLM stream
 │   │   ├── memory.py           # TTLCache session store (30-min TTL, 4-turn window)
@@ -239,7 +236,7 @@ Indexed fields: `metadata.cpt_codes` (keyword), `metadata.section` (keyword)
 | Frontend | React 18, Vite, Tailwind CSS, react-markdown |
 | Backend | FastAPI, Python 3.13, uv |
 | LLM | Groq `compound-beta` |
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
+| Embeddings | `fastembed` — `all-MiniLM-L6-v2` via ONNX Runtime (384-dim, no PyTorch) |
 | Vector DB | Qdrant Cloud |
 | PDF Parsing | pdfplumber |
 | Chunking | tiktoken (cl100k_base) |
