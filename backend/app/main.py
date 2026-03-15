@@ -12,7 +12,6 @@ limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm up embeddings model on startup
     get_embeddings()
     yield
 
