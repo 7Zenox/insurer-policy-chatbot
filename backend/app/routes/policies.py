@@ -26,6 +26,9 @@ async def list_policies(provider: str = DEFAULT_PROVIDER):
         for point in results:
             p = (point.payload or {}).get("metadata", point.payload or {})
             name = p.get("policy_name", "")
+            # Filter junk: empty names, update bulletins, or implausibly long strings
+            if not name or len(name) > 200 or "Update Bulletin" in name or name.startswith("To view"):
+                continue
             if name and name not in seen:
                 seen[name] = {
                     "name": name,

@@ -21,8 +21,8 @@ def push_chunks(chunks: List[PolicyChunk], collection_name: str):
             collection_name=collection_name,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
-        client.create_payload_index(collection_name, "cpt_codes", PayloadSchemaType.KEYWORD)
-        client.create_payload_index(collection_name, "section", PayloadSchemaType.KEYWORD)
+        client.create_payload_index(collection_name, "metadata.cpt_codes", PayloadSchemaType.KEYWORD)
+        client.create_payload_index(collection_name, "metadata.section", PayloadSchemaType.KEYWORD)
 
     # Batch upsert
     for i in tqdm(range(0, len(chunks), BATCH_SIZE), desc="Upserting batches"):

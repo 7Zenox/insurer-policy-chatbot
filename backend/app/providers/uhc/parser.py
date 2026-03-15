@@ -36,9 +36,22 @@ def parse_pdf(pdf_path: str) -> Dict:
         re.IGNORECASE,
     )
     policy_name = ""
-    for line in lines:
+    STOP_PATTERNS = re.compile(
+        r"^(Policy Number|Policy No|Effective Date|Table of Contents|Application\s*\.)",
+        re.IGNORECASE,
+    )
+    for idx, line in enumerate(lines):
         if not SKIP_PATTERNS.match(line):
-            policy_name = line
+            # Collect continuation lines (multi-line titles end mid-sentence)
+            name_parts = [line]
+            for next_line in lines[idx + 1:]:
+                if SKIP_PATTERNS.match(next_line) or STOP_PATTERNS.match(next_line):
+                    break
+                # Stop if next line looks like a new independent item (starts with capital, not conjunction)
+                if re.match(r"^(Policy|Effective|Table|Application|Coverage|Description|Definitions|References)", next_line):
+                    break
+                name_parts.append(next_line)
+            policy_name = " ".join(name_parts)
             break
     if not policy_name:
         policy_name = lines[0] if lines else ""
@@ -51,7 +64,7 @@ def parse_pdf(pdf_path: str) -> Dict:
     effective_date = date_match.group(1) if date_match else None
 
     # Extract policy number
-    num_match = re.search(r"Policy (?:No\.?|Number):?\s*([\w\-]+)", full_text)
+    num_match = re.search(r"Policy (?:No\.?|Number):?\s*([\w\-\.]+)", full_text)
     policy_number = num_match.group(1) if num_match else None
 
     # Split into sections
